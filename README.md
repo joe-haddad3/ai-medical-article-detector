@@ -47,9 +47,9 @@ Both lanes turn their input into the same five fields (`source`, `title`, `text`
 | --- | --- |
 | ![Rule Scorer code](docs/screenshots/04-rule-scorer-code.png) | ![Groq HTTP Request node](docs/screenshots/05-groq-node.png) |
 
-| Loop guard for the email lane | Execution history |
-| --- | --- |
-| ![Skip Own Scan Replies node](docs/screenshots/06-skip-own-replies.png) | ![Executions](docs/screenshots/07-executions.png) |
+**Loop guard for the email lane:** ignores the workflow's own `Scan result:` replies.
+
+![Skip Own Scan Replies node](docs/screenshots/06-skip-own-replies.png)
 
 ## Repository contents
 
