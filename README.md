@@ -3,7 +3,7 @@
 An [n8n](https://n8n.io) workflow that checks how likely medical articles are to be AI-written.
 
 - **Daily scan (08:00):** collects new articles from **PubMed**, **Zenodo** and **Europe PMC** and keeps up to 10 (max 4 per source). Each article is scored twice: by a rule-based detector that needs no API, and by an LLM judge on **Groq** (`openai/gpt-oss-120b`). The workflow then emails an HTML report and commits `articles.json` to a GitHub repo, which a website can display.
-- **Email scanner:** send an email, or attach a **PDF** or **DOCX**, to the watched inbox. The workflow extracts the text, scores it the same way and emails back a result card.
+- **Email scanner:** send an email from your own address, or attach a **PDF** or **DOCX**, to the watched inbox. The workflow extracts the text, scores it the same way and emails back a result card. Other senders, spam and documents without readable text are skipped.
 
 > AI-text detection gives probabilities, not proof. Treat flagged articles as leads to check by hand.
 
@@ -56,6 +56,7 @@ Both lanes turn their input into the same five fields (`source`, `title`, `text`
 | Path | What it is |
 | --- | --- |
 | [`workflow.json`](workflow.json) | The n8n workflow, ready to import (no credentials or personal data inside) |
+| [`LICENSE`](LICENSE) | MIT license |
 | [`docs/GUIDE.md`](docs/GUIDE.md) | Node-by-node guide: settings, APIs and every Code node explained |
 | `docs/images/` | Workflow diagram |
 | `docs/screenshots/` | Screenshots from n8n |
@@ -87,7 +88,7 @@ PubMed (NCBI E-utilities), Zenodo and Europe PMC are free and need no key.
    | GitHub token | Header Auth | Name `Authorization`, Value `Bearer YOUR_GITHUB_TOKEN` |
 
 4. **Fill in your own details:**
-   - `you@example.com` in *Send Daily Report*, *Send Scan Reply* and *Build Scan Reply*
+   - `you@example.com` in *Send Daily Report*, *Send Scan Reply*, *Build Scan Reply* and *Allowed Sender?* (only emails from this address are scanned)
    - `YOUR_GITHUB_USER/YOUR_REPO` in *GitHub Get SHA* and *GitHub Commit*
 5. **Test:** click **Execute workflow** for the daily lane. For the email lane, send yourself an unread email with a PDF and use **Fetch Test Event** on the Email Trigger.
 6. **Publish** the workflow so it runs on its own.
@@ -103,3 +104,10 @@ PubMed (NCBI E-utilities), Zenodo and Europe PMC are free and need no key.
 
 - `workflow.json` contains **no secrets**: n8n stores credentials separately, and the export only references them by name.
 - The *Skip Own Scan Replies* node prevents a loop. Scan replies go to the same inbox the trigger watches, so without it every reply would be scanned again. Keep it, or use a separate inbox for documents to scan.
+- The *Allowed Sender?* node only lets emails from your address into the email lane, so spam doesn't use Groq calls or trigger replies. Add more addresses there if others should use the scanner.
+- If Groq fails or returns broken JSON, articles keep their rule score and are marked *AI judge unavailable*, and the daily report shows a warning instead of silently reporting "0 flagged".
+- Emails or attachments with under 200 characters of text (for example scanned PDFs) get a "could not read" reply instead of a score.
+
+## License
+
+[MIT](LICENSE)

@@ -6,10 +6,10 @@ A node-by-node walkthrough of the n8n workflow in [`workflow.json`](../workflow.
 
 Every morning at 08:00 this workflow collects up to 10 new medical articles, scores how likely each one was written by AI, then emails you a report and updates `articles.json` on your GitHub site. It also watches your inbox: any unread email (or its PDF/DOCX attachment) gets the same check, and you get a scan-result email back.
 
-The 35 nodes form three parts that share one scoring engine:
+The 36 nodes form three parts that share one scoring engine:
 
 - **Daily lane (top):** Daily Trigger → PubMed, Zenodo and Europe PMC → merge → remove duplicates → score → Groq AI second opinion → email report + GitHub commit.
-- **Email lane (bottom):** IMAP trigger → skip the workflow's own replies → read the email → extract text from PDF or DOCX → score → Groq AI second opinion → reply email.
+- **Email lane (bottom):** IMAP trigger → skip the workflow's own replies and unknown senders → read the email → extract text from PDF or DOCX → score → Groq AI second opinion → reply email.
 - **Shared core (middle):** both lanes pass through the same **Rule Scorer**. The **Is Ingest Source?** node then sends each item back to its own lane.
 
 Every item that reaches the Rule Scorer has the same five fields: `source`, `title`, `text`, `url`, `date`. Each lane's "Normalize" Code node exists to build exactly this shape.
@@ -411,6 +411,7 @@ Groq runs open models very fast and offers an OpenAI-compatible API, so the requ
 | Send Body | On |
 | Body Content Type | JSON |
 | Specify Body | Using JSON (as an expression, below) |
+| Settings → On Error | Continue (an API error falls back to the rule score, see node 16) |
 
 ```javascript
 {{ JSON.stringify({
@@ -448,6 +449,8 @@ This node lines up Groq's results with the Rule Scorer items by position (result
 
 Flagged = final score 0.7 or more. Groq has the last word when it is confident.
 
+**If Groq gives no usable answer** (an API error, broken JSON or a missing result), the article keeps its rule score, is labelled *AI judge unavailable*, and the daily report shows a red warning at the top. The report never silently pretends everything is human.
+
 ```javascript
 const ruleItems = $('Rule Scorer').all().map(i => i.json);
 let groq = [];
@@ -455,43 +458,58 @@ try {
     const raw = $input.first().json;
     const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';
     const parsed = typeof content === 'string' ? JSON.parse(content) : content;
-    groq = parsed.results || parsed || [];
+    groq = Array.isArray(parsed.results) ? parsed.results : (Array.isArray(parsed) ? parsed : []);
 } catch (e) { groq = []; }
 const out = ruleItems.map((r, idx) => {
+    // AI judge gave no usable answer for this item: keep the rule score and say so
+    const gRaw = groq[idx];
+    if (!gRaw || (typeof gRaw.score !== 'number' && !gRaw.label)) {
+        const ruleOnly = typeof r.ai_probability === 'number' ? r.ai_probability : 0;
+        return {
+            ...r,
+            rule_probability: ruleOnly,
+            ai_second_opinion: null,
+            ai_second_label: 'Unavailable',
+            judge_unavailable: true,
+            ai_probability: ruleOnly,
+            flagged: ruleOnly >= 0.7,
+            reasoning: (r.reasoning || '') + ' | AI judge unavailable: rule score only'
+        };
+    }
     const g = groq[idx] || {};
     const gLabel = (g.label || '').toString().toLowerCase();
     const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');
     let groqAiProb;
     if (typeof g.score === 'number') {
-        const s = g.score;
-        if (aiFromGroq) {
-            groqAiProb = s >= 0.5 ? s : (1 - s);
-        } else {
-            groqAiProb = s <= 0.5 ? s : (1 - s);
-        }
+          const s = g.score;
+          if (aiFromGroq) {
+                  groqAiProb = s >= 0.5 ? s : (1 - s);
+          } else {
+                  groqAiProb = s <= 0.5 ? s : (1 - s);
+          }
     } else {
-        groqAiProb = aiFromGroq ? 0.8 : 0.1;
+          groqAiProb = aiFromGroq ? 0.8 : 0.1;
     }
     const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;
     let finalP;
     if (groqAiProb <= 0.2) {
-        finalP = Math.min(0.15, groqAiProb * 0.5 + ruleP * 0.15);
+          finalP = Math.min(0.15, groqAiProb * 0.5 + ruleP * 0.15);
     } else if (groqAiProb >= 0.8) {
-        finalP = Math.max(0.75, groqAiProb * 0.7 + ruleP * 0.3);
+          finalP = Math.max(0.75, groqAiProb * 0.7 + ruleP * 0.3);
     } else {
-        finalP = groqAiProb * 0.6 + ruleP * 0.4;
+          finalP = groqAiProb * 0.6 + ruleP * 0.4;
     }
     finalP = Math.round(finalP * 100) / 100;
     const flagged = finalP >= 0.7;
     return {
-        ...r,
-        rule_probability: ruleP,
-        ai_second_opinion: Math.round(groqAiProb * 100) / 100,
-        ai_second_label: aiFromGroq ? 'AI' : 'Human',
-        likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',
-        ai_probability: finalP,
-        flagged: flagged,
-        reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'
+          ...r,
+          rule_probability: ruleP,
+          ai_second_opinion: Math.round(groqAiProb * 100) / 100,
+          ai_second_label: aiFromGroq ? 'AI' : 'Human',
+          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',
+          ai_probability: finalP,
+          flagged: flagged,
+          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'
     };
 });
 return out.map(o => ({ json: o }));
@@ -511,13 +529,14 @@ const flagged = items.filter(i => i.flagged);
 const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const rows = list => list.map(i => `<tr><td><a href="${esc(i.url)}">${esc(i.title)}</a></td><td>${esc(i.source)}</td><td>${i.ai_probability === null || i.ai_probability === undefined ? 'n/a' : Math.round(i.ai_probability * 100) + '%'}</td><td>${esc(i.likely_model)}</td><td>${esc(i.reasoning)}</td></tr>`).join('');
 const table = list => `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px"><tr style="background:#f0f0f0"><th>Article</th><th>Source</th><th>AI probability</th><th>Likely model</th><th>Reasoning</th></tr>${rows(list)}</table>`;
-const html = `<h2>AI-Written Medical Articles — Daily Report</h2><p>${new Date().toDateString()} · ${items.length} articles analyzed · <b>${flagged.length} flagged as likely AI-written</b></p><h3>Flagged (probability ≥ 70%)</h3>${flagged.length ? table(flagged) : '<p>None today.</p>'}<h3>All analyzed articles</h3>${items.length ? table(items) : '<p>No articles with enough text were found today.</p>'}<p style="color:#888;font-size:11px">Note: AI-text detection is probabilistic and can be wrong in both directions. Treat these as leads, not proof.</p>`;
+const warn = items.some(i => i.judge_unavailable) ? '<p style="color:#B42318"><b>Warning:</b> the AI judge (Groq) did not answer for some or all articles. Their scores come from the rule engine only.</p>' : '';
+const html = `<h2>AI-Written Medical Articles — Daily Report</h2><p>${new Date().toDateString()} · ${items.length} articles analyzed · <b>${flagged.length} flagged as likely AI-written</b></p>${warn}<h3>Flagged (probability ≥ 70%)</h3>${flagged.length ? table(flagged) : '<p>None today.</p>'}<h3>All analyzed articles</h3>${items.length ? table(items) : '<p>No articles with enough text were found today.</p>'}<p style="color:#888;font-size:11px">Note: AI-text detection is probabilistic and can be wrong in both directions. Treat these as leads, not proof.</p>`;
 return [{ json: { html, total: items.length, flaggedCount: flagged.length } }];
 ```
 
 - `esc()` makes titles safe for HTML (so a `<` in a title cannot break the email).
 - `rows()` builds one table row per article; `table()` wraps rows in a styled table.
-- The email has a summary line, a "Flagged" table (score ≥ 70%) and an "All analyzed" table.
+- The email has a summary line, a warning when the AI judge was unavailable, a "Flagged" table (score ≥ 70%) and an "All analyzed" table.
 
 ### Node 18 – Send Daily Report (Send Email)
 
@@ -611,6 +630,20 @@ n8n marks the email as read after taking it, so each email is scanned once.
 
 The scan reply is sent to the same inbox the trigger watches. Without this node, every reply would be picked up, scanned and answered again, in an endless loop.
 
+### Node 23c – Allowed Sender? (If)
+
+| Field | Value |
+| --- | --- |
+| Condition type | String |
+| Value 1 | Expression `{{ JSON.stringify($json.from || '').toLowerCase() }}` |
+| Operation | Contains |
+| Value 2 | `you@example.com` (your own address) |
+| Combine | ANY |
+| true output | Prep Email Item |
+| false output | nothing (the email is ignored) |
+
+Only emails from your address are scanned, so spam and newsletters don't use Groq calls or trigger replies. To allow more senders, click **+ Add Condition** and add another address; with Combine = ANY, any match is enough.
+
 ### Node 24 – Prep Email Item (Code, Run Once for Each Item)
 
 ```javascript
@@ -689,11 +722,12 @@ This needs `NODE_FUNCTION_ALLOW_BUILTIN=zlib` (section 2).
 
 ```javascript
 const prep = $('Prep Email Item').item.json;
-const text = prep.hasAttachment ? ($json.text || '') : (prep.bodyText || '');
-return { json: { source: 'Email', title: prep.subject, text, url: '', date: new Date().toISOString() } };
+const text = (prep.hasAttachment ? ($json.text || '') : (prep.bodyText || '')).trim();
+// same 200-character minimum as the daily lane; too_short items get a 'could not read' reply
+return { json: { source: 'Email', title: prep.subject, text, url: '', date: new Date().toISOString(), too_short: text.length < 200 } };
 ```
 
-Builds the shared five-field shape. `source: 'Email'` is what later sends the item back to this lane. Then the item goes into the **Rule Scorer** and **Tag Source Type** (section 4), and **Is Ingest Source?** sends it to the true output.
+Builds the shared five-field shape and sets `too_short` when there are fewer than 200 characters of text (the same minimum as the daily lane), for example a scanned PDF that contains only images. `source: 'Email'` is what later sends the item back to this lane. Then the item goes into the **Rule Scorer** and **Tag Source Type** (section 4), and **Is Ingest Source?** sends it to the true output.
 
 ### Node 30 – Batch (Ingest) and Node 31 – AI Detection (Groq) (Ingest)
 
@@ -710,29 +744,89 @@ Same structure as Combine (Rule + AI), with three differences made for uploaded 
 | Flag threshold | 0.7 | 0.6 |
 | Extra field | – | `extraction_note` when the rule score is unreliable |
 
-The changed lines:
+It also handles two special cases first:
+
+- `too_short` items are not scored: they come back as *unreadable*, and the reply says the document could not be read.
+- If Groq gave no usable answer, the item keeps its rule score and is labelled *AI judge unavailable*.
 
 ```javascript
 // Combine for EMAIL/uploads: trust Groq more, esp. when rule score is unreliable (bad PDF extraction).
-...
+const ruleItems = $('Rule Scorer').all().map(i => i.json);
+let groq = [];
+try {
+    const raw = $input.first().json;
+    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';
+    const parsed = typeof content === 'string' ? JSON.parse(content) : content;
+    groq = Array.isArray(parsed.results) ? parsed.results : (Array.isArray(parsed) ? parsed : []);
+} catch (e) { groq = []; }
+const out = ruleItems.map((r, idx) => {
+    // Not enough readable text (e.g. a scanned PDF): don't pretend to score it
+    if (r.too_short) {
+        return {
+            ...r,
+            rule_probability: null,
+            ai_second_opinion: null,
+            ai_second_label: 'Skipped',
+            likely_model: '—',
+            ai_probability: null,
+            flagged: false,
+            unreadable: true,
+            extraction_note: 'not enough readable text',
+            reasoning: 'Not enough readable text to judge (under 200 characters). A scanned PDF contains images, not text.'
+        };
+    }
+    // AI judge gave no usable answer for this item: keep the rule score and say so
+    const gRaw = groq[idx];
+    if (!gRaw || (typeof gRaw.score !== 'number' && !gRaw.label)) {
+        const ruleOnly = typeof r.ai_probability === 'number' ? r.ai_probability : 0;
+        return {
+            ...r,
+            rule_probability: ruleOnly,
+            ai_second_opinion: null,
+            ai_second_label: 'Unavailable',
+            judge_unavailable: true,
+            ai_probability: ruleOnly,
+            flagged: ruleOnly >= 0.6,
+            reasoning: (r.reasoning || '') + ' | AI judge unavailable: rule score only'
+        };
+    }
+    const g = groq[idx] || {};
+    const gLabel = (g.label || '').toString().toLowerCase();
+    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');
+    let groqAiProb;
+    if (typeof g.score === 'number') {
+          const s = g.score;
+          if (aiFromGroq) {
+                  groqAiProb = s >= 0.5 ? s : (1 - s);
+          } else {
+                  groqAiProb = s <= 0.5 ? s : (1 - s);
+          }
     } else {
-        groqAiProb = aiFromGroq ? 0.8 : 0.15;
+          groqAiProb = aiFromGroq ? 0.8 : 0.15;
     }
     const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;
     const ruleUnreliable = ruleP < 0.1;
     let finalP;
     if (ruleUnreliable) {
-        finalP = 0.9 * groqAiProb + 0.1 * ruleP;
+          finalP = 0.9 * groqAiProb + 0.1 * ruleP;
     } else {
-        finalP = 0.65 * groqAiProb + 0.35 * ruleP;
+          finalP = 0.65 * groqAiProb + 0.35 * ruleP;
     }
     finalP = Math.round(finalP * 100) / 100;
     const flagged = finalP >= 0.6;
     return {
-        ...r,
-        // same fields as the daily Combine, plus:
-        extraction_note: ruleUnreliable ? 'rule score low (possible extraction loss) - trusting AI judge' : '',
+          ...r,
+          rule_probability: ruleP,
+          ai_second_opinion: Math.round(groqAiProb * 100) / 100,
+          ai_second_label: aiFromGroq ? 'AI' : 'Human',
+          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',
+          ai_probability: finalP,
+          flagged: flagged,
+          extraction_note: ruleUnreliable ? 'rule score low (possible extraction loss) - trusting AI judge' : '',
+          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'
     };
+});
+return out.map(o => ({ json: o }));
 ```
 
 ### Node 33 – Build Scan Reply (Code, Run Once for All Items)
@@ -745,19 +839,41 @@ const rows = items.map(a => {
   const groq = Math.round((a.ai_second_opinion||0)*100);
   const rule = Math.round((a.rule_probability||0)*100);
   const flagged = a.flagged;
-  const color = p>=70 ? '#D6453F' : (p>=40 ? '#C77D0A' : '#1F9E8F');
-  const verdict = flagged ? 'LIKELY AI-WRITTEN' : (p>=40 ? 'MIXED SIGNALS' : 'LIKELY HUMAN');
+  const color = a.unreadable ? '#8A94A6' : (flagged ? '#D6453F' : (p>=40 ? '#C77D0A' : '#1F9E8F'));
+  const verdict = a.unreadable ? 'COULD NOT READ' : (flagged ? 'LIKELY AI-WRITTEN' : (p>=40 ? 'MIXED SIGNALS' : 'LIKELY HUMAN'));
+  const judge = a.ai_second_opinion === null || a.ai_second_opinion === undefined ? (a.ai_second_label || 'unavailable').toLowerCase() : `${a.ai_second_label} (${groq}%)`;
+  const detail = a.unreadable ? 'Not enough readable text to judge. A scanned PDF contains images, not text.' : `Rule engine: ${rule}% &nbsp;|&nbsp; AI judge: ${judge}`;
   const title = a.title || a.subject || 'Uploaded document';
-  return `<tr> ... title, "Rule engine: ${rule}% | AI judge: ${a.ai_second_label} (${groq}%)", big ${p}% and ${verdict} in ${color} ... </tr>`;
+  return `<tr>
+    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2'>
+      <div style='font:600 15px Arial;color:#17223B'>${title}</div>
+      <div style='font:13px Arial;color:#5A6B85;margin-top:4px'>${detail}</div>
+    </td>
+    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2;text-align:right;white-space:nowrap'>
+      <div style='font:700 26px Arial;color:${color}'>${a.unreadable ? '—' : p + '%'}</div>
+      <div style='font:600 11px Arial;color:${color};letter-spacing:1px'>${verdict}</div>
+    </td>
+  </tr>`;
 }).join('');
-const html = `<div style='max-width:600px;...'> ... header "Your document scan result" ... <table>${rows}</table> ... note: "Scores are a screening aid, not proof of authorship." ... </div>`;
+const html = `<div style='max-width:600px;margin:auto;font-family:Arial'>
+  <div style='background:#0B2545;color:#fff;padding:22px 24px;border-radius:10px 10px 0 0'>
+    <div style='font:600 12px Arial;color:#8FB2FF;letter-spacing:2px'>AI-CONTENT INTEGRITY AGENT</div>
+    <div style='font:700 20px Arial;margin-top:6px'>Your document scan result</div>
+  </div>
+  <div style='border:1px solid #E1E8F2;border-top:none;padding:8px 24px 20px;border-radius:0 0 10px 10px'>
+    <table style='width:100%;border-collapse:collapse'>${rows}</table>
+    <div style='font:12px Arial;color:#5A6B85;margin-top:16px'>Scores are a screening aid, not proof of authorship. The rule engine and an AI judge are blended into one score.</div>
+  </div>
+</div>`;
 const first = items[0] || {};
 const p0 = Math.round((first.ai_probability||0)*100);
-const subject = `Scan result: ${p0}% AI` + (first.flagged ? ' — FLAGGED' : '');
+const subject = first.unreadable ? 'Scan result: could not read the document' : (`Scan result: ${p0}% AI` + (first.flagged ? ' — FLAGGED' : ''));
 return [{ json: { html, subject, to: 'you@example.com' } }];
 ```
 
-(The long inline-CSS HTML is shortened here with `...`; open the node to see it in full.) Colours: red at 70% or more, amber at 40–69%, green below 40%.
+- Colour and verdict use the same cut-off: red with *LIKELY AI-WRITTEN* when the item is flagged (≥ 60%), amber with *MIXED SIGNALS* from 40%, green with *LIKELY HUMAN* below.
+- Unreadable documents show a grey *COULD NOT READ* card, and the subject becomes `Scan result: could not read the document`.
+- Every subject starts with `Scan result:`, which is what *Skip Own Scan Replies* filters on.
 
 ### Node 34 – Send Scan Reply (Send Email)
 
@@ -811,6 +927,10 @@ Follow these steps in order to watch the data change at each node. Each node sho
 
 ### Changelog
 
+- **Sender check:** the new *Allowed Sender?* node only lets emails from your own address into the email lane, so spam and newsletters are ignored.
+- **AI judge failures are visible:** if Groq errors or returns broken JSON, articles keep their rule score, are labelled *AI judge unavailable*, and the daily report shows a warning. Before, every article silently dropped to about 10–15% ("0 flagged").
+- **Minimum text in the email lane:** documents with under 200 characters of text (for example scanned PDFs) get a *could not read* reply instead of a meaningless score.
+- **Honest scan reply:** the footer now says the rule engine and the AI judge are blended into one score, and the red colour starts at the same cut-off as the *LIKELY AI-WRITTEN* verdict.
 - **Email loop fixed:** the new *Skip Own Scan Replies* node ignores the workflow's own `Scan result:` emails. Before, each reply was scanned again, sending a new email every ~30 seconds.
 - **Scan reply body:** *Send Scan Reply* now sends the HTML result card (it was sending an empty body).
 - **Balanced sources:** *Dedupe & Prepare* takes at most 4 articles per source, so Zenodo and Europe PMC are no longer crowded out by PubMed.
@@ -820,9 +940,9 @@ Follow these steps in order to watch the data change at each node. Each node sho
 
 | Limitation | Effect | Possible change |
 | --- | --- | --- |
-| Scan reply always goes to the address in *Build Scan Reply* | Someone else who emails a document does not get the result | Save the sender in *Prep Email Item* and use it as `to` |
+| Scan reply always goes to the address in *Build Scan Reply*, and only allowed senders are scanned | Others can't use the scanner | Add their addresses to *Allowed Sender?* and save the sender in *Prep Email Item* to reply to them |
 | Different flag thresholds: 0.7 (daily) and 0.6 (email) | The same text can be flagged by email but not in the daily report | Choose one value |
-| Groq results are matched by position | If Groq returns fewer results than texts, the last articles fall back to a default score | Check `results.length` in the Combine nodes |
+| Groq results are matched by position | If Groq returns fewer results than texts, the last articles fall back to their rule score (marked *AI judge unavailable*) | Ask Groq to echo an id per text and match on it |
 | Rule-based signals are heuristics | Short or heavily edited texts can be misjudged | Treat scores as leads, not proof |
 
 AI-text detection gives probabilities, not proof. Treat flagged articles as leads to check by hand.

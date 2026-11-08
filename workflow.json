@@ -249,7 +249,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const ruleItems = $('Rule Scorer').all().map(i => i.json);\nlet groq = [];\ntry {\n    const raw = $input.first().json;\n    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    groq = parsed.results || parsed || [];\n} catch (e) { groq = []; }\nconst out = ruleItems.map((r, idx) => {\n    const g = groq[idx] || {};\n    const gLabel = (g.label || '').toString().toLowerCase();\n    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');\n    let groqAiProb;\n    if (typeof g.score === 'number') {\n          const s = g.score;\n          if (aiFromGroq) {\n                  groqAiProb = s >= 0.5 ? s : (1 - s);\n          } else {\n                  groqAiProb = s <= 0.5 ? s : (1 - s);\n          }\n    } else {\n          groqAiProb = aiFromGroq ? 0.8 : 0.1;\n    }\n    const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n    let finalP;\n    if (groqAiProb <= 0.2) {\n          finalP = Math.min(0.15, groqAiProb * 0.5 + ruleP * 0.15);\n    } else if (groqAiProb >= 0.8) {\n          finalP = Math.max(0.75, groqAiProb * 0.7 + ruleP * 0.3);\n    } else {\n          finalP = groqAiProb * 0.6 + ruleP * 0.4;\n    }\n    finalP = Math.round(finalP * 100) / 100;\n    const flagged = finalP >= 0.7;\n    return {\n          ...r,\n          rule_probability: ruleP,\n          ai_second_opinion: Math.round(groqAiProb * 100) / 100,\n          ai_second_label: aiFromGroq ? 'AI' : 'Human',\n          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',\n          ai_probability: finalP,\n          flagged: flagged,\n          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'\n    };\n});\nreturn out.map(o => ({ json: o }));"
+        "jsCode": "const ruleItems = $('Rule Scorer').all().map(i => i.json);\nlet groq = [];\ntry {\n    const raw = $input.first().json;\n    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    groq = Array.isArray(parsed.results) ? parsed.results : (Array.isArray(parsed) ? parsed : []);\n} catch (e) { groq = []; }\nconst out = ruleItems.map((r, idx) => {\n    // AI judge gave no usable answer for this item: keep the rule score and say so\n    const gRaw = groq[idx];\n    if (!gRaw || (typeof gRaw.score !== 'number' && !gRaw.label)) {\n        const ruleOnly = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n        return {\n            ...r,\n            rule_probability: ruleOnly,\n            ai_second_opinion: null,\n            ai_second_label: 'Unavailable',\n            judge_unavailable: true,\n            ai_probability: ruleOnly,\n            flagged: ruleOnly >= 0.7,\n            reasoning: (r.reasoning || '') + ' | AI judge unavailable: rule score only'\n        };\n    }\n    const g = groq[idx] || {};\n    const gLabel = (g.label || '').toString().toLowerCase();\n    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');\n    let groqAiProb;\n    if (typeof g.score === 'number') {\n          const s = g.score;\n          if (aiFromGroq) {\n                  groqAiProb = s >= 0.5 ? s : (1 - s);\n          } else {\n                  groqAiProb = s <= 0.5 ? s : (1 - s);\n          }\n    } else {\n          groqAiProb = aiFromGroq ? 0.8 : 0.1;\n    }\n    const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n    let finalP;\n    if (groqAiProb <= 0.2) {\n          finalP = Math.min(0.15, groqAiProb * 0.5 + ruleP * 0.15);\n    } else if (groqAiProb >= 0.8) {\n          finalP = Math.max(0.75, groqAiProb * 0.7 + ruleP * 0.3);\n    } else {\n          finalP = groqAiProb * 0.6 + ruleP * 0.4;\n    }\n    finalP = Math.round(finalP * 100) / 100;\n    const flagged = finalP >= 0.7;\n    return {\n          ...r,\n          rule_probability: ruleP,\n          ai_second_opinion: Math.round(groqAiProb * 100) / 100,\n          ai_second_label: aiFromGroq ? 'AI' : 'Human',\n          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',\n          ai_probability: finalP,\n          flagged: flagged,\n          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'\n    };\n});\nreturn out.map(o => ({ json: o }));"
       },
       "id": "parse-verdict-11",
       "name": "Combine (Rule + AI)",
@@ -262,7 +262,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all().map(i => i.json);\nconst flagged = items.filter(i => i.flagged);\nconst esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst rows = list => list.map(i => `<tr><td><a href=\"${esc(i.url)}\">${esc(i.title)}</a></td><td>${esc(i.source)}</td><td>${i.ai_probability === null || i.ai_probability === undefined ? 'n/a' : Math.round(i.ai_probability * 100) + '%'}</td><td>${esc(i.likely_model)}</td><td>${esc(i.reasoning)}</td></tr>`).join('');\nconst table = list => `<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px\"><tr style=\"background:#f0f0f0\"><th>Article</th><th>Source</th><th>AI probability</th><th>Likely model</th><th>Reasoning</th></tr>${rows(list)}</table>`;\nconst html = `<h2>AI-Written Medical Articles — Daily Report</h2><p>${new Date().toDateString()} · ${items.length} articles analyzed · <b>${flagged.length} flagged as likely AI-written</b></p><h3>Flagged (probability ≥ 70%)</h3>${flagged.length ? table(flagged) : '<p>None today.</p>'}<h3>All analyzed articles</h3>${items.length ? table(items) : '<p>No articles with enough text were found today.</p>'}<p style=\"color:#888;font-size:11px\">Note: AI-text detection is probabilistic and can be wrong in both directions. Treat these as leads, not proof.</p>`;\nreturn [{ json: { html, total: items.length, flaggedCount: flagged.length } }];"
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst flagged = items.filter(i => i.flagged);\nconst esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst rows = list => list.map(i => `<tr><td><a href=\"${esc(i.url)}\">${esc(i.title)}</a></td><td>${esc(i.source)}</td><td>${i.ai_probability === null || i.ai_probability === undefined ? 'n/a' : Math.round(i.ai_probability * 100) + '%'}</td><td>${esc(i.likely_model)}</td><td>${esc(i.reasoning)}</td></tr>`).join('');\nconst table = list => `<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px\"><tr style=\"background:#f0f0f0\"><th>Article</th><th>Source</th><th>AI probability</th><th>Likely model</th><th>Reasoning</th></tr>${rows(list)}</table>`;\nconst warn = items.some(i => i.judge_unavailable) ? '<p style=\"color:#B42318\"><b>Warning:</b> the AI judge (Groq) did not answer for some or all articles. Their scores come from the rule engine only.</p>' : '';\nconst html = `<h2>AI-Written Medical Articles — Daily Report</h2><p>${new Date().toDateString()} · ${items.length} articles analyzed · <b>${flagged.length} flagged as likely AI-written</b></p>${warn}<h3>Flagged (probability ≥ 70%)</h3>${flagged.length ? table(flagged) : '<p>None today.</p>'}<h3>All analyzed articles</h3>${items.length ? table(items) : '<p>No articles with enough text were found today.</p>'}<p style=\"color:#888;font-size:11px\">Note: AI-text detection is probabilistic and can be wrong in both directions. Treat these as leads, not proof.</p>`;\nreturn [{ json: { html, total: items.length, flaggedCount: flagged.length } }];"
       },
       "id": "build-report-012",
       "name": "Build Email Report",
@@ -433,7 +433,7 @@
       "type": "n8n-nodes-base.emailReadImap",
       "typeVersion": 2,
       "position": [
-        -928,
+        -1152,
         576
       ],
       "credentials": {
@@ -528,7 +528,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const prep = $('Prep Email Item').item.json;\nconst text = prep.hasAttachment ? ($json.text || '') : (prep.bodyText || '');\nreturn { json: { source: 'Email', title: prep.subject, text, url: '', date: new Date().toISOString() } };"
+        "jsCode": "const prep = $('Prep Email Item').item.json;\nconst text = (prep.hasAttachment ? ($json.text || '') : (prep.bodyText || '')).trim();\n// same 200-character minimum as the daily lane; too_short items get a 'could not read' reply\nreturn { json: { source: 'Email', title: prep.subject, text, url: '', date: new Date().toISOString(), too_short: text.length < 200 } };"
       },
       "id": "ingest-normalize-email-14",
       "name": "Normalize Email",
@@ -609,11 +609,12 @@
         "httpHeaderAuth": {
           "name": "Groq API key"
         }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Combine for EMAIL/uploads: trust Groq more, esp. when rule score is unreliable (bad PDF extraction).\nconst ruleItems = $('Rule Scorer').all().map(i => i.json);\nlet groq = [];\ntry {\n    const raw = $input.first().json;\n    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    groq = parsed.results || parsed || [];\n} catch (e) { groq = []; }\nconst out = ruleItems.map((r, idx) => {\n    const g = groq[idx] || {};\n    const gLabel = (g.label || '').toString().toLowerCase();\n    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');\n    let groqAiProb;\n    if (typeof g.score === 'number') {\n          const s = g.score;\n          if (aiFromGroq) {\n                  groqAiProb = s >= 0.5 ? s : (1 - s);\n          } else {\n                  groqAiProb = s <= 0.5 ? s : (1 - s);\n          }\n    } else {\n          groqAiProb = aiFromGroq ? 0.8 : 0.15;\n    }\n    const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n    const ruleUnreliable = ruleP < 0.1;\n    let finalP;\n    if (ruleUnreliable) {\n          finalP = 0.9 * groqAiProb + 0.1 * ruleP;\n    } else {\n          finalP = 0.65 * groqAiProb + 0.35 * ruleP;\n    }\n    finalP = Math.round(finalP * 100) / 100;\n    const flagged = finalP >= 0.6;\n    return {\n          ...r,\n          rule_probability: ruleP,\n          ai_second_opinion: Math.round(groqAiProb * 100) / 100,\n          ai_second_label: aiFromGroq ? 'AI' : 'Human',\n          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',\n          ai_probability: finalP,\n          flagged: flagged,\n          extraction_note: ruleUnreliable ? 'rule score low (possible extraction loss) - trusting AI judge' : '',\n          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'\n    };\n});\nreturn out.map(o => ({ json: o }));"
+        "jsCode": "// Combine for EMAIL/uploads: trust Groq more, esp. when rule score is unreliable (bad PDF extraction).\nconst ruleItems = $('Rule Scorer').all().map(i => i.json);\nlet groq = [];\ntry {\n    const raw = $input.first().json;\n    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    groq = Array.isArray(parsed.results) ? parsed.results : (Array.isArray(parsed) ? parsed : []);\n} catch (e) { groq = []; }\nconst out = ruleItems.map((r, idx) => {\n    // Not enough readable text (e.g. a scanned PDF): don't pretend to score it\n    if (r.too_short) {\n        return {\n            ...r,\n            rule_probability: null,\n            ai_second_opinion: null,\n            ai_second_label: 'Skipped',\n            likely_model: '—',\n            ai_probability: null,\n            flagged: false,\n            unreadable: true,\n            extraction_note: 'not enough readable text',\n            reasoning: 'Not enough readable text to judge (under 200 characters). A scanned PDF contains images, not text.'\n        };\n    }\n    // AI judge gave no usable answer for this item: keep the rule score and say so\n    const gRaw = groq[idx];\n    if (!gRaw || (typeof gRaw.score !== 'number' && !gRaw.label)) {\n        const ruleOnly = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n        return {\n            ...r,\n            rule_probability: ruleOnly,\n            ai_second_opinion: null,\n            ai_second_label: 'Unavailable',\n            judge_unavailable: true,\n            ai_probability: ruleOnly,\n            flagged: ruleOnly >= 0.6,\n            reasoning: (r.reasoning || '') + ' | AI judge unavailable: rule score only'\n        };\n    }\n    const g = groq[idx] || {};\n    const gLabel = (g.label || '').toString().toLowerCase();\n    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');\n    let groqAiProb;\n    if (typeof g.score === 'number') {\n          const s = g.score;\n          if (aiFromGroq) {\n                  groqAiProb = s >= 0.5 ? s : (1 - s);\n          } else {\n                  groqAiProb = s <= 0.5 ? s : (1 - s);\n          }\n    } else {\n          groqAiProb = aiFromGroq ? 0.8 : 0.15;\n    }\n    const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n    const ruleUnreliable = ruleP < 0.1;\n    let finalP;\n    if (ruleUnreliable) {\n          finalP = 0.9 * groqAiProb + 0.1 * ruleP;\n    } else {\n          finalP = 0.65 * groqAiProb + 0.35 * ruleP;\n    }\n    finalP = Math.round(finalP * 100) / 100;\n    const flagged = finalP >= 0.6;\n    return {\n          ...r,\n          rule_probability: ruleP,\n          ai_second_opinion: Math.round(groqAiProb * 100) / 100,\n          ai_second_label: aiFromGroq ? 'AI' : 'Human',\n          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',\n          ai_probability: finalP,\n          flagged: flagged,\n          extraction_note: ruleUnreliable ? 'rule score low (possible extraction loss) - trusting AI judge' : '',\n          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'\n    };\n});\nreturn out.map(o => ({ json: o }));"
       },
       "id": "ingest-combine-19",
       "name": "Combine (Ingest)",
@@ -647,11 +648,12 @@
         "httpHeaderAuth": {
           "name": "Groq API key"
         }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Build a friendly HTML email summarizing the scan result for each item.\nconst items = $input.all().map(i => i.json);\nconst rows = items.map(a => {\n  const p = Math.round((a.ai_probability||0)*100);\n  const groq = Math.round((a.ai_second_opinion||0)*100);\n  const rule = Math.round((a.rule_probability||0)*100);\n  const flagged = a.flagged;\n  const color = p>=70 ? '#D6453F' : (p>=40 ? '#C77D0A' : '#1F9E8F');\n  const verdict = flagged ? 'LIKELY AI-WRITTEN' : (p>=40 ? 'MIXED SIGNALS' : 'LIKELY HUMAN');\n  const title = a.title || a.subject || 'Uploaded document';\n  return `<tr>\n    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2'>\n      <div style='font:600 15px Arial;color:#17223B'>${title}</div>\n      <div style='font:13px Arial;color:#5A6B85;margin-top:4px'>Rule engine: ${rule}% &nbsp;|&nbsp; AI judge: ${a.ai_second_label} (${groq}%)</div>\n    </td>\n    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2;text-align:right;white-space:nowrap'>\n      <div style='font:700 26px Arial;color:${color}'>${p}%</div>\n      <div style='font:600 11px Arial;color:${color};letter-spacing:1px'>${verdict}</div>\n    </td>\n  </tr>`;\n}).join('');\nconst html = `<div style='max-width:600px;margin:auto;font-family:Arial'>\n  <div style='background:#0B2545;color:#fff;padding:22px 24px;border-radius:10px 10px 0 0'>\n    <div style='font:600 12px Arial;color:#8FB2FF;letter-spacing:2px'>AI-CONTENT INTEGRITY AGENT</div>\n    <div style='font:700 20px Arial;margin-top:6px'>Your document scan result</div>\n  </div>\n  <div style='border:1px solid #E1E8F2;border-top:none;padding:8px 24px 20px;border-radius:0 0 10px 10px'>\n    <table style='width:100%;border-collapse:collapse'>${rows}</table>\n    <div style='font:12px Arial;color:#5A6B85;margin-top:16px'>Scores are a screening aid, not proof of authorship. The AI judge cross-checks the rule engine; a document is flagged only when both lean AI.</div>\n  </div>\n</div>`;\nconst first = items[0] || {};\nconst p0 = Math.round((first.ai_probability||0)*100);\nconst subject = `Scan result: ${p0}% AI` + (first.flagged ? ' — FLAGGED' : '');\nreturn [{ json: { html, subject, to: 'you@example.com' } }];"
+        "jsCode": "// Build a friendly HTML email summarizing the scan result for each item.\nconst items = $input.all().map(i => i.json);\nconst rows = items.map(a => {\n  const p = Math.round((a.ai_probability||0)*100);\n  const groq = Math.round((a.ai_second_opinion||0)*100);\n  const rule = Math.round((a.rule_probability||0)*100);\n  const flagged = a.flagged;\n  const color = a.unreadable ? '#8A94A6' : (flagged ? '#D6453F' : (p>=40 ? '#C77D0A' : '#1F9E8F'));\n  const verdict = a.unreadable ? 'COULD NOT READ' : (flagged ? 'LIKELY AI-WRITTEN' : (p>=40 ? 'MIXED SIGNALS' : 'LIKELY HUMAN'));\n  const judge = a.ai_second_opinion === null || a.ai_second_opinion === undefined ? (a.ai_second_label || 'unavailable').toLowerCase() : `${a.ai_second_label} (${groq}%)`;\n  const detail = a.unreadable ? 'Not enough readable text to judge. A scanned PDF contains images, not text.' : `Rule engine: ${rule}% &nbsp;|&nbsp; AI judge: ${judge}`;\n  const title = a.title || a.subject || 'Uploaded document';\n  return `<tr>\n    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2'>\n      <div style='font:600 15px Arial;color:#17223B'>${title}</div>\n      <div style='font:13px Arial;color:#5A6B85;margin-top:4px'>${detail}</div>\n    </td>\n    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2;text-align:right;white-space:nowrap'>\n      <div style='font:700 26px Arial;color:${color}'>${a.unreadable ? '—' : p + '%'}</div>\n      <div style='font:600 11px Arial;color:${color};letter-spacing:1px'>${verdict}</div>\n    </td>\n  </tr>`;\n}).join('');\nconst html = `<div style='max-width:600px;margin:auto;font-family:Arial'>\n  <div style='background:#0B2545;color:#fff;padding:22px 24px;border-radius:10px 10px 0 0'>\n    <div style='font:600 12px Arial;color:#8FB2FF;letter-spacing:2px'>AI-CONTENT INTEGRITY AGENT</div>\n    <div style='font:700 20px Arial;margin-top:6px'>Your document scan result</div>\n  </div>\n  <div style='border:1px solid #E1E8F2;border-top:none;padding:8px 24px 20px;border-radius:0 0 10px 10px'>\n    <table style='width:100%;border-collapse:collapse'>${rows}</table>\n    <div style='font:12px Arial;color:#5A6B85;margin-top:16px'>Scores are a screening aid, not proof of authorship. The rule engine and an AI judge are blended into one score.</div>\n  </div>\n</div>`;\nconst first = items[0] || {};\nconst p0 = Math.round((first.ai_probability||0)*100);\nconst subject = first.unreadable ? 'Scan result: could not read the document' : (`Scan result: ${p0}% AI` + (first.flagged ? ' — FLAGGED' : ''));\nreturn [{ json: { html, subject, to: 'you@example.com' } }];"
       },
       "id": "build-scan-reply-01",
       "name": "Build Scan Reply",
@@ -691,7 +693,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
       "position": [
-        -704,
+        -928,
         576
       ],
       "notes": "Stops the loop: emails whose subject starts with Scan result: are this workflow's own replies. true = ignore, false = continue.",
@@ -705,6 +707,29 @@
             }
           ]
         }
+      }
+    },
+    {
+      "id": "allowed-sender-check-01",
+      "name": "Allowed Sender?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        576
+      ],
+      "notes": "Only emails from this address are scanned. Spam and newsletters go to the false output and are ignored. Add more addresses with + Add Condition and Combine = ANY.",
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ JSON.stringify($json.from || '').toLowerCase() }}",
+              "operation": "contains",
+              "value2": "you@example.com"
+            }
+          ]
+        },
+        "combineOperation": "any"
       }
     }
   ],
@@ -1091,11 +1116,23 @@
         [],
         [
           {
-            "node": "Prep Email Item",
+            "node": "Allowed Sender?",
             "type": "main",
             "index": 0
           }
         ]
+      ]
+    },
+    "Allowed Sender?": {
+      "main": [
+        [
+          {
+            "node": "Prep Email Item",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },
