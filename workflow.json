@@ -1,0 +1,1107 @@
+{
+  "name": "AI Medical Article Detector",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "trigger-00000001",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -704,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "db",
+              "value": "pubmed"
+            },
+            {
+              "name": "term",
+              "value": "medicine"
+            },
+            {
+              "name": "retmax",
+              "value": "10"
+            },
+            {
+              "name": "retmode",
+              "value": "json"
+            },
+            {
+              "name": "sort",
+              "value": "date"
+            },
+            {
+              "name": "reldate",
+              "value": "7"
+            },
+            {
+              "name": "datetype",
+              "value": "pdat"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "pubmed-search-01",
+      "name": "PubMed Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        112
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "db",
+              "value": "pubmed"
+            },
+            {
+              "name": "id",
+              "value": "={{ ($json.esearchresult && $json.esearchresult.idlist ? $json.esearchresult.idlist : []).join(',') }}"
+            },
+            {
+              "name": "rettype",
+              "value": "abstract"
+            },
+            {
+              "name": "retmode",
+              "value": "xml"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "pubmed-fetch-002",
+      "name": "PubMed Fetch Abstracts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -256,
+        112
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  const xml = item.json.data || '';\n  const chunks = xml.split('<PubmedArticle>').slice(1);\n  for (const c of chunks) {\n    const pmid = (c.match(/<PMID[^>]*>(\\d+)<\\/PMID>/) || [])[1];\n    const title = ((c.match(/<ArticleTitle[^>]*>([\\s\\S]*?)<\\/ArticleTitle>/) || [])[1] || '').replace(/<[^>]+>/g, '').trim();\n    const abs = [...c.matchAll(/<AbstractText[^>]*>([\\s\\S]*?)<\\/AbstractText>/g)].map(m => m[1].replace(/<[^>]+>/g, '')).join(' ').trim();\n    if (pmid && title) {\n      out.push({ json: { source: 'PubMed', title, text: abs, url: 'https://pubmed.ncbi.nlm.nih.gov/' + pmid + '/', date: '' } });\n    }\n  }\n}\nreturn out;"
+      },
+      "id": "pubmed-norm-0003",
+      "name": "Normalize PubMed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://zenodo.org/api/records",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "medical"
+            },
+            {
+              "name": "size",
+              "value": "10"
+            },
+            {
+              "name": "sort",
+              "value": "newest"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "zenodo-search-04",
+      "name": "Zenodo Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        240
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  const hits = item.json.hits && item.json.hits.hits ? item.json.hits.hits : [];\n  for (const h of hits) {\n    const md = h.metadata || {};\n    const text = (md.description || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n    out.push({ json: { source: 'Zenodo', title: md.title || '(untitled)', text, url: (h.links && (h.links.self_html || h.links.html)) || '', date: md.publication_date || '' } });\n  }\n}\nreturn out;"
+      },
+      "id": "zenodo-norm-0005",
+      "name": "Normalize Zenodo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "medicine"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "pageSize",
+              "value": "10"
+            },
+            {
+              "name": "resultType",
+              "value": "core"
+            },
+            {
+              "name": "sort",
+              "value": "P_PDATE_D desc"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "scholar-serp-006",
+      "name": "Europe PMC Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        384
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  const results = (item.json.resultList && item.json.resultList.result) || [];\n  for (const r of results) {\n    const url = r.doi ? ('https://doi.org/' + r.doi) : (r.pmid ? ('https://pubmed.ncbi.nlm.nih.gov/' + r.pmid + '/') : ((r.id && r.source) ? ('https://europepmc.org/article/' + r.source + '/' + r.id) : ''));\n    const text = (r.abstractText || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n    out.push({ json: { source: 'Europe PMC', title: r.title || '', text, url, date: r.firstPublicationDate || '' } });\n  }\n}\nreturn out;"
+      },
+      "id": "scholar-norm-007",
+      "name": "Normalize Europe PMC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "id": "merge-sources-08",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        208,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX = 10;       // total articles per run (keeps the Groq request small)\nconst PER_SOURCE = 4; // max per source, so Zenodo and Europe PMC also get scored\nconst seen = new Set();\nconst perSource = {};\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const key = (j.title || \"\").toLowerCase().trim();\n  if (!key || seen.has(key)) continue;\n  seen.add(key);\n  const text = (j.text || \"\").slice(0, 3000);\n  if (text.length < 200) continue; // not enough text to judge fairly\n  const src = j.source || \"Other\";\n  if ((perSource[src] || 0) >= PER_SOURCE) continue;\n  perSource[src] = (perSource[src] || 0) + 1;\n  out.push({ json: { ...j, text } });\n  if (out.length >= MAX) break;\n}\nreturn out;"
+      },
+      "id": "dedupe-prep-009",
+      "name": "Dedupe & Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ruleItems = $('Rule Scorer').all().map(i => i.json);\nlet groq = [];\ntry {\n    const raw = $input.first().json;\n    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    groq = parsed.results || parsed || [];\n} catch (e) { groq = []; }\nconst out = ruleItems.map((r, idx) => {\n    const g = groq[idx] || {};\n    const gLabel = (g.label || '').toString().toLowerCase();\n    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');\n    let groqAiProb;\n    if (typeof g.score === 'number') {\n          const s = g.score;\n          if (aiFromGroq) {\n                  groqAiProb = s >= 0.5 ? s : (1 - s);\n          } else {\n                  groqAiProb = s <= 0.5 ? s : (1 - s);\n          }\n    } else {\n          groqAiProb = aiFromGroq ? 0.8 : 0.1;\n    }\n    const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n    let finalP;\n    if (groqAiProb <= 0.2) {\n          finalP = Math.min(0.15, groqAiProb * 0.5 + ruleP * 0.15);\n    } else if (groqAiProb >= 0.8) {\n          finalP = Math.max(0.75, groqAiProb * 0.7 + ruleP * 0.3);\n    } else {\n          finalP = groqAiProb * 0.6 + ruleP * 0.4;\n    }\n    finalP = Math.round(finalP * 100) / 100;\n    const flagged = finalP >= 0.7;\n    return {\n          ...r,\n          rule_probability: ruleP,\n          ai_second_opinion: Math.round(groqAiProb * 100) / 100,\n          ai_second_label: aiFromGroq ? 'AI' : 'Human',\n          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',\n          ai_probability: finalP,\n          flagged: flagged,\n          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'\n    };\n});\nreturn out.map(o => ({ json: o }));"
+      },
+      "id": "parse-verdict-11",
+      "name": "Combine (Rule + AI)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1776,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst flagged = items.filter(i => i.flagged);\nconst esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst rows = list => list.map(i => `<tr><td><a href=\"${esc(i.url)}\">${esc(i.title)}</a></td><td>${esc(i.source)}</td><td>${i.ai_probability === null || i.ai_probability === undefined ? 'n/a' : Math.round(i.ai_probability * 100) + '%'}</td><td>${esc(i.likely_model)}</td><td>${esc(i.reasoning)}</td></tr>`).join('');\nconst table = list => `<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px\"><tr style=\"background:#f0f0f0\"><th>Article</th><th>Source</th><th>AI probability</th><th>Likely model</th><th>Reasoning</th></tr>${rows(list)}</table>`;\nconst html = `<h2>AI-Written Medical Articles — Daily Report</h2><p>${new Date().toDateString()} · ${items.length} articles analyzed · <b>${flagged.length} flagged as likely AI-written</b></p><h3>Flagged (probability ≥ 70%)</h3>${flagged.length ? table(flagged) : '<p>None today.</p>'}<h3>All analyzed articles</h3>${items.length ? table(items) : '<p>No articles with enough text were found today.</p>'}<p style=\"color:#888;font-size:11px\">Note: AI-text detection is probabilistic and can be wrong in both directions. Treat these as leads, not proof.</p>`;\nreturn [{ json: { html, total: items.length, flaggedCount: flagged.length } }];"
+      },
+      "id": "build-report-012",
+      "name": "Build Email Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "you@example.com",
+        "toEmail": "you@example.com",
+        "subject": "={{ 'Daily AI Medical Articles Report — ' + new Date().toISOString().slice(0,10) }}",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "gmail-send-0013",
+      "name": "Send Daily Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2224,
+        64
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst texts = items.map(a => (a.text || '').slice(0, 2000));\nreturn [{ json: { texts, count: items.length } }];"
+      },
+      "id": "batch-one-req-14",
+      "name": "Batch Into One Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst clean = items.map(a => ({ source: a.source, title: a.title, url: a.url, ai_probability: a.ai_probability, likely_model: a.likely_model, reasoning: a.reasoning, flagged: !!a.flagged, date: a.date || '' }));\nconst payload = JSON.stringify(clean, null, 2);\nreturn [{ json: { payload, count: clean.length } }];"
+      },
+      "id": "build-site-json-20",
+      "name": "Build Site JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/repos/YOUR_GITHUB_USER/YOUR_REPO/contents/articles.json?ref=main",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-ai-detector"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gh-get-sha-21",
+      "name": "GitHub Get SHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2224,
+        224
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "GitHub token"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Build Site JSON').first().json.payload;\nconst prev = $input.first().json || {};\nconst sha = prev.sha; // undefined on first run (file didn't exist)\nconst body = { message: 'Update articles.json (' + $now.toISO() + ')', content: Buffer.from(payload).toString('base64'), branch: 'main' };\nif (sha) body.sha = sha;\nreturn [{ json: body }];"
+      },
+      "id": "gh-build-body-22",
+      "name": "Build Commit Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "https://api.github.com/repos/YOUR_GITHUB_USER/YOUR_REPO/contents/articles.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-ai-detector"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "gh-commit-23",
+      "name": "GitHub Commit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2672,
+        224
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "GitHub token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// ===== Rule-based AI detector — NO external API (uses shared AI \"tell\" words + per-model fingerprints) =====\nconst TELLS = [\"delve\",\"delving\",\"leverage\",\"leveraging\",\"utilize\",\"utilizing\",\"harness\",\"harnessing\",\"underscore\",\"underscores\",\"facilitate\",\"streamline\",\"streamlining\",\"foster\",\"fostering\",\"embark\",\"unlock\",\"unlocking\",\"unleash\",\"showcase\",\"showcasing\",\"elevate\",\"encompass\",\"encompassing\",\"robust\",\"pivotal\",\"seamless\",\"seamlessly\",\"comprehensive\",\"innovative\",\"cutting-edge\",\"crucial\",\"paramount\",\"nuanced\",\"multifaceted\",\"intricate\",\"meticulous\",\"meticulously\",\"tapestry\",\"landscape\",\"realm\",\"synergy\",\"paradigm\",\"myriad\",\"beacon\",\"cornerstone\",\"furthermore\",\"moreover\",\"consequently\",\"notably\"];\nconst PHRASES = [\"it's important to note\",\"in today's fast-paced\",\"in conclusion\",\"when it comes to\",\"navigate the complexities\",\"a testament to\",\"plays a pivotal role\",\"plays a crucial role\",\"it is worth noting\",\"certainly!\",\"i'd be happy to\",\"great question\",\"i hope this helps\",\"let's dive in\",\"here's a breakdown\"];\n\nfunction esc(s){return s.replace(/[-\\/\\\\^$*+?.()|[\\]{}]/g,'\\\\$&');}\n\nfunction score(a){\n  const text = ((a.title||\"\") + \". \" + (a.text||\"\")).trim();\n  const lower = text.toLowerCase();\n  const words = (text.match(/\\b[\\w'-]+\\b/g)||[]);\n  const wc = Math.max(1, words.length);\n  const per1000 = 1000/wc;\n\n  // 1) tell-word hits\n  const tellHits = [];\n  let tellCount = 0;\n  for (const t of TELLS){\n    const m = lower.match(new RegExp(\"\\\\b\"+esc(t)+\"\\\\b\",\"g\"));\n    if (m){ tellCount += m.length; tellHits.push(t+(m.length>1?\" x\"+m.length:\"\")); }\n  }\n  const phraseHits = PHRASES.filter(p=>lower.includes(p));\n  const tellDensity = tellCount*per1000;\n\n  // 2) em-dash rate (per 1000 words)\n  const emDashes = (text.match(/—/g)||[]).length;\n  const emRate = emDashes*per1000;\n\n  // 3) formatting\n  const hasBold = /\\*\\*[^*]+\\*\\*|__[^_]+__/.test(text) || /(^|\\n)#{1,3}\\s/.test(text);\n  const hasItalics = /(^|\\s)[*_][^*_\\n]{2,}[*_]/.test(text);\n  const bullets = (text.match(/(^|\\n)\\s*[-*•]\\s/g)||[]).length;\n\n  // 4) human specificity: concrete stats/numbers\n  const stats = (lower.match(/\\bp\\s*[<=>]\\s*0?\\.\\d+|\\b95%\\s*ci|\\bn\\s*=\\s*\\d+|\\bconfidence interval|\\bodds ratio|\\bhazard ratio|\\b\\d+(\\.\\d+)?%/g)||[]).length;\n  const digits = (text.match(/\\d/g)||[]).length;\n  const digitDensity = digits*per1000;\n\n  // 5) burstiness — coefficient of variation of sentence lengths (low = uniform = AI-like)\n  const sents = text.split(/[.!?]+/).map(s=>s.trim()).filter(s=>s.length>0);\n  const lens = sents.map(s=>(s.match(/\\b[\\w'-]+\\b/g)||[]).length).filter(n=>n>0);\n  const mean = lens.reduce((x,y)=>x+y,0)/Math.max(1,lens.length);\n  const varr = lens.reduce((x,y)=>x+(y-mean)*(y-mean),0)/Math.max(1,lens.length);\n  const cv = mean>0 ? Math.sqrt(varr)/mean : 0.5;\n\n  // ---- combine ----\n  let p = 0;\n  p += Math.min(0.45, tellDensity*0.03);\n  p += Math.min(0.22, phraseHits.length*0.11);\n  p += (cv < 0.35 ? 0.15 : cv < 0.50 ? 0.07 : 0);\n  p += (hasBold ? 0.06 : 0) + (bullets>=3 ? 0.04 : 0);\n  p -= Math.min(0.22, stats*0.05);\n  p -= (digitDensity>18 ? 0.08 : 0);\n  p = Math.max(0, Math.min(1, p));\n\n  // ---- likely model (best-effort guess) ----\n  let model = \"human\";\n  if (p >= 0.4){\n    if (emRate >= 6 && hasBold) model = \"chatgpt\";\n    else if (emRate >= 6 && bullets>=3) model = \"deepseek\";\n    else if (emRate < 1 && hasItalics) model = \"gemini\";\n    else if (emRate < 1 && !hasBold) model = \"claude\";\n    else if (hasBold) model = \"chatgpt\";\n    else model = \"unknown\";\n  }\n\n  const bits = [];\n  if (tellHits.length) bits.push(\"AI words: \"+tellHits.slice(0,5).join(\", \"));\n  if (phraseHits.length) bits.push('phrases: \"'+phraseHits.slice(0,2).join('\", \"')+'\"');\n  if (emRate>=6) bits.push(\"heavy em-dashes (\"+emRate.toFixed(1)+\"/1k)\");\n  else if (emRate<1 && p>=0.4) bits.push(\"near-zero em-dashes\");\n  if (cv<0.35) bits.push(\"uniform sentence lengths\");\n  if (stats) bits.push(stats+\" concrete stats (human-leaning)\");\n  const reasoning = bits.length ? bits.join(\"; \") : \"few AI tells detected\";\n\n  return { ai_probability: Math.round(p*100)/100, likely_model: model, reasoning };\n}\n\nreturn $input.all().map(item=>{\n  const a = item.json;\n  const v = score(a);\n  return { json: { ...a, ai_probability:v.ai_probability, likely_model:v.likely_model, reasoning:v.reasoning, flagged: v.ai_probability>=0.7 } };\n});"
+      },
+      "id": "rule-scorer-30",
+      "name": "Rule Scorer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "format": "resolved",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]",
+          "forceReconnect": 60
+        }
+      },
+      "id": "ingest-imap-trigger-08",
+      "name": "Email Trigger (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        -928,
+        576
+      ],
+      "credentials": {
+        "imap": {
+          "name": "Gmail IMAP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const j = $json;\nconst subject = j.subject || '(no subject)';\nconst bodyText = j.text || j.textPlain || (j.html ? String(j.html).replace(/<[^>]+>/g,' ') : '') || '';\nconst binKeys = Object.keys($binary || {});\nlet attKey = null, attType = null, filename = '';\nfor (const k of binKeys) {\n  const bin = $binary[k];\n  const name = (bin.fileName || '').toLowerCase();\n  const mime = (bin.mimeType || '').toLowerCase();\n  if (mime.includes('pdf') || name.endsWith('.pdf')) { attKey = k; attType = 'pdf'; filename = bin.fileName || ''; break; }\n  if (mime.includes('wordprocessingml.document') || name.endsWith('.docx')) { attKey = k; attType = 'docx'; filename = bin.fileName || ''; break; }\n}\nreturn { json: { subject, bodyText, attKey, attType, filename, hasAttachment: !!attKey }, binary: $binary };"
+      },
+      "id": "ingest-prep-email-09",
+      "name": "Prep Email Item",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.attType}}",
+              "value2": "pdf"
+            }
+          ]
+        }
+      },
+      "id": "ingest-route-email-pdf-10",
+      "name": "Route Email PDF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "={{$json.attKey}}",
+        "options": {}
+      },
+      "id": "ingest-extract-pdf-email-11",
+      "name": "Extract PDF (Email)",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.attType}}",
+              "value2": "docx"
+            }
+          ]
+        }
+      },
+      "id": "ingest-route-email-docx-12",
+      "name": "Route Email DOCX?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const zlib = require('zlib');\nconst key = $json.attKey;\nlet buf;\ntry { buf = await this.helpers.getBinaryDataBuffer($itemIndex, key); }\ncatch (e) { buf = Buffer.from($binary[key].data, \"base64\"); }\nlet offset = 0;\nlet docXml = null;\nwhile (offset < buf.length - 4) {\n  const sig = buf.readUInt32LE(offset);\n  if (sig !== 0x04034b50) break;\n  const compMethod = buf.readUInt16LE(offset+8);\n  const compSize = buf.readUInt32LE(offset+18);\n  const nameLen = buf.readUInt16LE(offset+26);\n  const extraLen = buf.readUInt16LE(offset+28);\n  const nameStart = offset+30;\n  const name = buf.slice(nameStart, nameStart+nameLen).toString('utf8');\n  const dataStart = nameStart+nameLen+extraLen;\n  if (name === 'word/document.xml') {\n    const raw = buf.slice(dataStart, dataStart+compSize);\n    docXml = compMethod === 8 ? zlib.inflateRawSync(raw).toString('utf8') : raw.toString('utf8');\n    break;\n  }\n  offset = dataStart + compSize;\n}\nlet text = '';\nif (docXml) {\n  text = docXml.replace(/<\\/w:p>/g,'\\n').replace(/<w:tab\\/>/g,'\\t').replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim();\n}\nreturn { json: { text } };"
+      },
+      "id": "ingest-extract-docx-email-13",
+      "name": "Extract DOCX (Email)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const prep = $('Prep Email Item').item.json;\nconst text = prep.hasAttachment ? ($json.text || '') : (prep.bodyText || '');\nreturn { json: { source: 'Email', title: prep.subject, text, url: '', date: new Date().toISOString() } };"
+      },
+      "id": "ingest-normalize-email-14",
+      "name": "Normalize Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const j = $json;\nconst isIngestSource = (j.source === 'Upload' || j.source === 'Email');\nreturn { json: { ...j, isIngestSource } };"
+      },
+      "id": "ingest-tag-source-15",
+      "name": "Tag Source Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.isIngestSource}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "ingest-is-ingest-16",
+      "name": "Is Ingest Source?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst texts = items.map(a => (a.text || '').slice(0, 2000));\nreturn [{ json: { texts, count: items.length } }];"
+      },
+      "id": "ingest-batch-17",
+      "name": "Batch (Ingest)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'openai/gpt-oss-120b', temperature: 0, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: 'You are an AI-text forensic classifier. You will receive a JSON array of texts. For EACH text, decide if it was written by an AI language model. Return ONLY a JSON object of the form {\\\"results\\\":[{\\\"label\\\":\\\"AI\\\" or \\\"Human\\\",\\\"score\\\":0.0-1.0,\\\"model\\\":\\\"ChatGPT|Claude|Gemini|Unknown\\\"}]} with one entry per input text in the same order. score = your confidence it is AI. No prose.' }, { role: 'user', content: JSON.stringify($json.texts) } ] }) }}",
+        "options": {}
+      },
+      "id": "ingest-ai-detect-18",
+      "name": "AI Detection (Groq) (Ingest)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1552,
+        384
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Groq API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine for EMAIL/uploads: trust Groq more, esp. when rule score is unreliable (bad PDF extraction).\nconst ruleItems = $('Rule Scorer').all().map(i => i.json);\nlet groq = [];\ntry {\n    const raw = $input.first().json;\n    const content = raw?.choices?.[0]?.message?.content || raw?.body?.choices?.[0]?.message?.content || '';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    groq = parsed.results || parsed || [];\n} catch (e) { groq = []; }\nconst out = ruleItems.map((r, idx) => {\n    const g = groq[idx] || {};\n    const gLabel = (g.label || '').toString().toLowerCase();\n    const aiFromGroq = gLabel.startsWith('ai') || gLabel.includes('fake');\n    let groqAiProb;\n    if (typeof g.score === 'number') {\n          const s = g.score;\n          if (aiFromGroq) {\n                  groqAiProb = s >= 0.5 ? s : (1 - s);\n          } else {\n                  groqAiProb = s <= 0.5 ? s : (1 - s);\n          }\n    } else {\n          groqAiProb = aiFromGroq ? 0.8 : 0.15;\n    }\n    const ruleP = typeof r.ai_probability === 'number' ? r.ai_probability : 0;\n    const ruleUnreliable = ruleP < 0.1;\n    let finalP;\n    if (ruleUnreliable) {\n          finalP = 0.9 * groqAiProb + 0.1 * ruleP;\n    } else {\n          finalP = 0.65 * groqAiProb + 0.35 * ruleP;\n    }\n    finalP = Math.round(finalP * 100) / 100;\n    const flagged = finalP >= 0.6;\n    return {\n          ...r,\n          rule_probability: ruleP,\n          ai_second_opinion: Math.round(groqAiProb * 100) / 100,\n          ai_second_label: aiFromGroq ? 'AI' : 'Human',\n          likely_model: aiFromGroq ? (g.model || r.likely_model || 'Unknown') : '—',\n          ai_probability: finalP,\n          flagged: flagged,\n          extraction_note: ruleUnreliable ? 'rule score low (possible extraction loss) - trusting AI judge' : '',\n          reasoning: (r.reasoning || '') + ' | AI second opinion: ' + (aiFromGroq ? 'AI' : 'Human') + ' (' + Math.round(groqAiProb*100) + '%)'\n    };\n});\nreturn out.map(o => ({ json: o }));"
+      },
+      "id": "ingest-combine-19",
+      "name": "Combine (Ingest)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'openai/gpt-oss-120b', temperature: 0, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: 'You are an AI-text forensic classifier. You will receive a JSON array of texts. For EACH text, decide if it was written by an AI language model. Return ONLY a JSON object of the form {\\\"results\\\":[{\\\"label\\\":\\\"AI\\\" or \\\"Human\\\",\\\"score\\\":0.0-1.0,\\\"model\\\":\\\"ChatGPT|Claude|Gemini|Unknown\\\"}]} with one entry per input text in the same order. score = your confidence it is AI. No prose.' }, { role: 'user', content: JSON.stringify($json.texts) } ] }) }}",
+        "options": {}
+      },
+      "id": "ai-detect-hf-daily-01",
+      "name": "AI Detection (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1552,
+        144
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Groq API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a friendly HTML email summarizing the scan result for each item.\nconst items = $input.all().map(i => i.json);\nconst rows = items.map(a => {\n  const p = Math.round((a.ai_probability||0)*100);\n  const groq = Math.round((a.ai_second_opinion||0)*100);\n  const rule = Math.round((a.rule_probability||0)*100);\n  const flagged = a.flagged;\n  const color = p>=70 ? '#D6453F' : (p>=40 ? '#C77D0A' : '#1F9E8F');\n  const verdict = flagged ? 'LIKELY AI-WRITTEN' : (p>=40 ? 'MIXED SIGNALS' : 'LIKELY HUMAN');\n  const title = a.title || a.subject || 'Uploaded document';\n  return `<tr>\n    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2'>\n      <div style='font:600 15px Arial;color:#17223B'>${title}</div>\n      <div style='font:13px Arial;color:#5A6B85;margin-top:4px'>Rule engine: ${rule}% &nbsp;|&nbsp; AI judge: ${a.ai_second_label} (${groq}%)</div>\n    </td>\n    <td style='padding:14px 0;border-bottom:1px solid #E1E8F2;text-align:right;white-space:nowrap'>\n      <div style='font:700 26px Arial;color:${color}'>${p}%</div>\n      <div style='font:600 11px Arial;color:${color};letter-spacing:1px'>${verdict}</div>\n    </td>\n  </tr>`;\n}).join('');\nconst html = `<div style='max-width:600px;margin:auto;font-family:Arial'>\n  <div style='background:#0B2545;color:#fff;padding:22px 24px;border-radius:10px 10px 0 0'>\n    <div style='font:600 12px Arial;color:#8FB2FF;letter-spacing:2px'>AI-CONTENT INTEGRITY AGENT</div>\n    <div style='font:700 20px Arial;margin-top:6px'>Your document scan result</div>\n  </div>\n  <div style='border:1px solid #E1E8F2;border-top:none;padding:8px 24px 20px;border-radius:0 0 10px 10px'>\n    <table style='width:100%;border-collapse:collapse'>${rows}</table>\n    <div style='font:12px Arial;color:#5A6B85;margin-top:16px'>Scores are a screening aid, not proof of authorship. The AI judge cross-checks the rule engine; a document is flagged only when both lean AI.</div>\n  </div>\n</div>`;\nconst first = items[0] || {};\nconst p0 = Math.round((first.ai_probability||0)*100);\nconst subject = `Scan result: ${p0}% AI` + (first.flagged ? ' — FLAGGED' : '');\nreturn [{ json: { html, subject, to: 'you@example.com' } }];"
+      },
+      "id": "build-scan-reply-01",
+      "name": "Build Scan Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "you@example.com",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-scan-reply-01",
+      "name": "Send Scan Reply",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        560
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "id": "82a53c25-452b-4b49-8abe-931613d55124",
+      "name": "Skip Own Scan Replies",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        576
+      ],
+      "notes": "Stops the loop: emails whose subject starts with Scan result: are this workflow's own replies. true = ignore, false = continue.",
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.subject || \"\" }}",
+              "operation": "startsWith",
+              "value2": "Scan result:"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Trigger": {
+      "main": [
+        [
+          {
+            "node": "PubMed Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Zenodo Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Europe PMC Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PubMed Search": {
+      "main": [
+        [
+          {
+            "node": "PubMed Fetch Abstracts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PubMed Fetch Abstracts": {
+      "main": [
+        [
+          {
+            "node": "Normalize PubMed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize PubMed": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zenodo Search": {
+      "main": [
+        [
+          {
+            "node": "Normalize Zenodo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Zenodo": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          {
+            "node": "Dedupe & Prepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe & Prepare": {
+      "main": [
+        [
+          {
+            "node": "Rule Scorer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Report": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Site JSON": {
+      "main": [
+        [
+          {
+            "node": "GitHub Get SHA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub Get SHA": {
+      "main": [
+        [
+          {
+            "node": "Build Commit Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Commit Body": {
+      "main": [
+        [
+          {
+            "node": "GitHub Commit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Europe PMC Search": {
+      "main": [
+        [
+          {
+            "node": "Normalize Europe PMC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Europe PMC": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Rule Scorer": {
+      "main": [
+        [
+          {
+            "node": "Tag Source Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Into One Request": {
+      "main": [
+        [
+          {
+            "node": "AI Detection (Groq)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine (Rule + AI)": {
+      "main": [
+        [
+          {
+            "node": "Build Email Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Site JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Skip Own Scan Replies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Email Item": {
+      "main": [
+        [
+          {
+            "node": "Route Email PDF?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Email PDF?": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF (Email)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route Email DOCX?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF (Email)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Email DOCX?": {
+      "main": [
+        [
+          {
+            "node": "Extract DOCX (Email)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract DOCX (Email)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Email": {
+      "main": [
+        [
+          {
+            "node": "Rule Scorer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag Source Type": {
+      "main": [
+        [
+          {
+            "node": "Is Ingest Source?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Ingest Source?": {
+      "main": [
+        [
+          {
+            "node": "Batch (Ingest)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Batch Into One Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch (Ingest)": {
+      "main": [
+        [
+          {
+            "node": "AI Detection (Groq) (Ingest)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine (Ingest)": {
+      "main": [
+        [
+          {
+            "node": "Build Scan Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Detection (Groq)": {
+      "main": [
+        [
+          {
+            "node": "Combine (Rule + AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Detection (Groq) (Ingest)": {
+      "main": [
+        [
+          {
+            "node": "Combine (Ingest)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Scan Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Scan Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Own Scan Replies": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Prep Email Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
